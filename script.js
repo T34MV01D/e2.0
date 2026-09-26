@@ -1,299 +1,113 @@
-class GameGallery {
-  constructor() {
-    this.g = []; // Games list
-    this.b = []; // Badges/Sources list
-    this.d = new Set(["UNTESTED", ""]); // Disabled filters
-    this.s = document.getElementById("searchInput");
-    this.f = document.getElementById("badgeFilter");
-    this.expandedGroups = new Set(); // Tracks open/expanded group IDs
-    this.init();
-  }
+const CATEGORIES = [
+    { key: "featured", title: "Featured" },
+    { key: "default", title: "Games" },
+    { key: "archive", title: "Archive (Unsupported)" }
+];
 
-  async init() {
-    const res = await (await fetch("data.json")).json();
-    const badgeByName = new Map();
-
-    await Promise.all(res.map(async (src) => {
-      let badge = badgeByName.get(src.name);
-      if (!badge) {
-        badge = { ...src };
-        badgeByName.set(src.name, badge);
-        this.b.push(badge);
-      }
-
-      const data = await (await fetch(`data/${src.location}.json`)).json();
-      
-      const parse = (s, grp, gm) => s
-        .replace(/group\.path/g, grp.path || "").replace(/group\.image/g, grp.image || "")
-        .replace(/game\[(\d+)\]/g, (_, i) => gm[i] || "")
-        .replace(/\((.*?)\|\|(.*?)\)/g, (_, a, b) => a.trim() || b.trim())
-        .replace(/['"+\s]/g, "").replace(/[,;]$/, "");
-
-      data.forEach(item => {
-        if (item.games && !item.name) {
-          item.games.forEach(gm => this.g.push({
-            t: gm[0], u: parse(src.url, item, gm), i: parse(src.img, item, gm), type: src.name, isGroup: false
-          }));
-        }
-
-        if (item.groups) {
-          item.groups.forEach((grp, gIdx) => {
-            const groupName = grp.name ? grp.name.trim() : `Group ${gIdx}`;
-            const groupId = `${src.name}_grp_${gIdx}_${groupName}`;
-            
-            const groupGames = (grp.games || []).map(gm => ({
-              t: gm[0],
-              u: parse(src.url, grp, gm),
-              i: parse(src.img, grp, gm),
-              type: src.name,
-              isSubGame: true
-            }));
-
-            this.g.push({
-              id: groupId,
-              t: groupName,
-              i: grp.img || parse(src.img, grp, []),
-              type: src.name,
-              isGroup: true,
-              games: groupGames
-            });
-          });
-        }
-      });
-    }));
-
-    // Deduplicate top-level items and sort: Golden games -> Groups -> Standard games -> Alphabetical
-    const seen = new Set();
-    this.g = this.g.filter(x => {
-      const k = x.t?.toLowerCase().replace(/[^a-z0-9]/g, "");
-      return k && !seen.has(k) && seen.add(k);
-    }).sort((a, b) => {
-      const aIsGolden = !a.isGroup && a.t.startsWith(' ');
-      const bIsGolden = !b.isGroup && b.t.startsWith(' ');
-
-      if (aIsGolden && !bIsGolden) return -1;
-      if (!aIsGolden && bIsGolden) return 1;
-      if (a.isGroup && !b.isGroup) return -1;
-      if (!a.isGroup && b.isGroup) return 1;
-      
-      return a.t.localeCompare(b.t);
-    });
-
-    if (this.f) this.f.innerHTML = this.b.map(b => 
-      `<span class="badge b-i" data-t="${b.name}">${b.name}</span>`
-    ).join("");
-    
-    this.s?.addEventListener("input", () => this.r());
-    
-    this.f?.addEventListener("click", (e) => {
-      const t = e.target.dataset.t;
-      if (t) { this.d.has(t) ? this.d.delete(t) : this.d.add(t); this.u(); }
-    });
-
-    window.onresize = () => this.r();
-    this.u();
-  }
-
-  u() {
-    document.querySelectorAll(".b-i").forEach(el => 
-      el.classList.toggle("disabled", this.d.has(el.dataset.t))
+async function loadCatalog() {
+    const entries = await Promise.all(
+        CATEGORIES.map(async ({ key, title }) => {
+            try {
+                const response = await fetch(`/data/${key}.json`);
+                if (!response.ok) return [key, title, []];
+                const data = await response.json();
+                const sorted = data.sort((a, b) => a[0].localeCompare(b[0]));
+                return [key, title, sorted];
+            } catch {
+                return [key, title, []];
+            }
+        })
     );
-    this.r();
-  }
+    return entries; // Returns map of [key, title, games[]]
+}
 
-  r() {
-    const q = this.s?.value.toLowerCase() || "";
-    const filtered = [];
-    
-    this.g.forEach(item => {
-      if (this.d.has(item.type)) return;
+function loadUI(catalog) {
+    const container = document.getElementById("container");
+    const template = document.getElementById("game-template");
 
-      if (item.isGroup) {
-        const groupMatches = !q || item.t.toLowerCase().includes(q);
-        const matchingSubGames = item.games.filter(sub => !q || sub.t.toLowerCase().includes(q));
+    function render(filteredCatalog) {
+        container.replaceChildren();
 
-        if (groupMatches || matchingSubGames.length > 0) {
-          filtered.push({
-            ...item,
-            games: groupMatches ? item.games : matchingSubGames
-          });
+        for (const [key, title, games] of filteredCatalog) {
+            if (games.length === 0) continue;
+
+            const section = document.createElement("section");
+            section.className = `catalog-section section-${key}`;
+
+            const heading = document.createElement("h2");
+            heading.className = "section-heading";
+            heading.textContent = title;
+            section.appendChild(heading);
+
+            const grid = document.createElement("div");
+            grid.className = "section-grid";
+
+            const fragment = document.createDocumentFragment();
+            for (const [gameTitle, url, image] of games) {
+                const card = template.content.cloneNode(true);
+                const link = card.querySelector(".game-card");
+                link.href = url;
+                link.title = gameTitle;
+
+                const img = card.querySelector(".game-card-image");
+                img.src = image;
+                img.alt = gameTitle;
+
+                card.querySelector(".game-card-title").textContent = gameTitle;
+
+                fragment.append(card);
+            }
+
+            grid.append(fragment);
+            section.append(grid);
+            container.append(section);
         }
-      } else if (!q || item.t.toLowerCase().includes(q)) {
-        filtered.push(item);
-      }
-    });
-    
-    const renderList = [];
-    filtered.forEach(item => {
-      renderList.push(item);
-      const shouldExpand = (q && q.trim().length > 0) || this.expandedGroups.has(item.id);
-      if (item.isGroup && shouldExpand) {
-        item.games.forEach(subGame => renderList.push({ ...subGame, parentId: item.id }));
-      }
-    });
-
-    const w = 180, gap = 15;
-    const cols = Math.max(Math.floor((window.innerWidth - 20) / (w + gap)), 1);
-    const rows = [];
-
-    for (let i = 0; i < renderList.length; i += cols) {
-      rows.push(`<div class="game-row" style="display:grid;grid-template-columns:repeat(${cols},${w}px);gap:${gap}px;justify-content:center;margin-bottom:${gap}px">
-        ${renderList.slice(i, i + cols).map(g => {
-          if (g.isGroup) {
-            const isExpanded = (q && q.trim().length > 0) || this.expandedGroups.has(g.id);
-            return `
-              <div class="game-card group-card ${isExpanded ? 'expanded' : ''}" data-group-id="${g.id}" style="width:${w}px; cursor:pointer;">
-                <span style="${g.type == "DEFAULT" ? "display:none" : ""}" class="badge">${g.type}</span>
-                <img src="${g.i}" loading="lazy" onerror="this.style.display='none'">
-                <div class="title">📁 ${g.t} (${g.games.length})</div>
-              </div>`;
-          } else {
-            return `
-              <a href="${g.u}" class="game-card${g.t.startsWith(' ') ? ' official-game' : ''}${g.isSubGame ? ' sub-game-card' : ''}" style="width:${w}px" target="_blank">
-                <span style="${g.type == "DEFAULT" ? "display:none" : ""}" class="badge">${g.type}</span>
-                <img src="${g.i}" loading="lazy" onerror="this.style.display='none'">
-                <div class="title">${g.t}</div>
-              </a>`;
-          }
-        }).join("")}
-      </div>`);
     }
 
-    const scrollArea = document.getElementById("scrollArea");
-    const currentScrollTop = scrollArea ? scrollArea.scrollTop : 0;
+    render(catalog);
 
-    if (this.c) this.c.destroy(true);
-    this.c = new Clusterize({ rows, scrollId: "scrollArea", contentId: "contentArea", tag: "div" });
+    return {
+        filter(searchTerm) {
+            if (!searchTerm) {
+                render(catalog);
+                return;
+            }
 
-    if (scrollArea) scrollArea.scrollTop = currentScrollTop;
-  }
+            const filtered = catalog.map(([key, title, games]) => {
+                const matched = games.filter(([gameTitle]) =>
+                    gameTitle.toLowerCase().includes(searchTerm)
+                );
+                return [key, title, matched];
+            });
+
+            render(filtered);
+        }
+    };
 }
 
-// Global delegated event listener for container content clicks
-document.getElementById("contentArea")?.addEventListener("click", (e) => {
-  const groupCard = e.target.closest(".group-card");
-  if (groupCard) {
-    const groupId = groupCard.dataset.groupId;
-    if (window.gameGalleryInstance) {
-      if (window.gameGalleryInstance.expandedGroups.has(groupId)) {
-        window.gameGalleryInstance.expandedGroups.delete(groupId);
-      } else {
-        window.gameGalleryInstance.expandedGroups.add(groupId);
-      }
-      window.gameGalleryInstance.r();
-    }
-    return;
-  }
+function setupSearch(ui) {
+    const searchInput = document.getElementById("search");
 
-  const gameCard = e.target.closest(".game-card:not(.group-card)");
-  if (gameCard) {
-    const gameTitle = gameCard.querySelector(".title")?.textContent || "Unknown";
-    const gameBadge = gameCard.querySelector(".badge")?.textContent || "DEFAULT";
-    gtag('event', 'game_clicked', {
-      game_name: gameTitle,
-      game_type: gameBadge,
-      game_url: gameCard.href
+    searchInput.addEventListener("input", () => {
+        ui.filter(searchInput.value.trim().toLowerCase());
     });
-  }
-});
 
-window.gameGalleryInstance = new GameGallery();
-
-// Modal functionality
-const newsBtn = document.getElementById("newsBtn");
-const newsModal = document.getElementById("newsModal");
-const closeModal = document.getElementById("closeModal");
-const tabBtns = document.querySelectorAll(".tab-btn");
-const updateBadge = document.getElementById("updateBadge");
-
-async function loadInfo() {
-    //localStorage.setItem("appVersion", info.version);
-    
-    const changelogContent = document.getElementById("changelogContent");
-    changelogContent.innerHTML = `
-    <h3>Save Sigma Bundler</h3>
-
-    <p>
-        <strong>Sigma Bundler might not be around forever.</strong>
-    </p>
-
-    <p>
-        Sigma Bundler has over <strong>1,600 games</strong>, requires
-        <strong>no accounts</strong>, and is completely free to use.
-        But with so few people playing, it's getting harder to justify
-        continuing development.
-    </p>
-
-    <p>
-        If you want Sigma Bundler to stick around, the best thing you
-        can do is <strong>share it.</strong>
-    </p>
-
-    <p>
-        Send it to a friend, post it somewhere, or tell someone who
-        used to play here. <strong>Every player counts.</strong>
-    </p>
-
-    <h3>What happens next?</h3>
-
-    <p>
-        We're going to see if we can bring the community back.
-        If enough people return, Sigma Bundler will keep getting
-        updates and new games.
-    </p>
-
-    <p>
-        If the numbers stay low, Our team may eventually shut the project down.
-    </p>
-
-    <h3>What's planned?</h3>
-
-    <p>
-        There's still a lot We'd like to do with Sigma Bundler, including:
-    </p>
-
-    <ul>
-        <li>A better organized games list</li>
-        <li>Favorites and recently played games</li>
-        <li>An easier way to request games and send feedback</li>
-        <li>Accounts and social features</li>
-        <li>No more broken games</li>
-        <li>Better mobile support</li>
-        <li>Tons of new games (including every retro game N64 and before)</li>
-    </ul>
-
-    <p>
-        <strong>If you want to see those updates happen, help bring
-        Sigma Bundler back.</strong>
-    </p>
-
-    <p>
-        ❤️ Thanks for playing.
-    </p>
-`;
-    
-    const aboutContent = document.getElementById("aboutContent");
-    aboutContent.innerHTML = `
-     ┘→¡§-┤Σ╚3≥Φσ☻├
-    `;
+    window.addEventListener("keydown", (e) => {
+        if (e.key === "/" && !["INPUT", "TEXTAREA"].includes(document.activeElement.tagName)) {
+            e.preventDefault();
+            searchInput.focus();
+        }
+        if (e.key === "Escape") {
+            searchInput.value = "";
+            ui.filter("");
+            searchInput.blur();
+        }
+    });
 }
 
-loadInfo();
+const catalog = await loadCatalog();
 
-newsBtn?.addEventListener("click", () => {
-  newsModal.classList.add("active");
-  updateBadge.style.display = "none";
-});
-closeModal?.addEventListener("click", () => newsModal.classList.remove("active"));
-newsModal?.addEventListener("click", (e) => {
-  if (e.target === newsModal) newsModal.classList.remove("active");
-});
+console.log(catalog);
 
-tabBtns.forEach(btn => {
-  btn.addEventListener("click", () => {
-    document.querySelectorAll(".tab-btn").forEach(b => b.classList.remove("active"));
-    document.querySelectorAll(".tab-content").forEach(c => c.classList.remove("active"));
-    btn.classList.add("active");
-    document.getElementById(btn.dataset.tab)?.classList.add("active");
-  });
-});
+const ui = loadUI(catalog);
+setupSearch(ui);
