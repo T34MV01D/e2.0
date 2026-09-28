@@ -164,7 +164,7 @@
                 nextBatch.forEach((game, index) => {
                     const gameCard = document.createElement("a");
                     // Exact URL structure preserved as requested
-                    gameCard.href = `https://e-18196749.codehs.me/retro.html?core=autodetect&rom=https://raw.githubusercontent.com/sigmiliarity/retro1/refs/heads/main/${encodeURIComponent(game)}`;
+                    gameCard.href = `/retro.html?core=autodetect&rom=https://raw.githubusercontent.com/sigmiliarity/retro1/refs/heads/main/${encodeURIComponent(game)}`;
                     gameCard.target = "_blank";
                     gameCard.rel = "noopener noreferrer";
                     
